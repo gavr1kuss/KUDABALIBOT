@@ -1,8 +1,10 @@
 import asyncio
+import json
 import logging
 import random
 import aiohttp
 import re as _re
+from datetime import date as date_type
 from html.parser import HTMLParser
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
@@ -99,10 +101,40 @@ async def parse_event_details_light(session: aiohttp.ClientSession, link: str) -
     if body_text and len(body_text) > 20:
         parts.append(f"CONTENT:\n{body_text}")
 
+    # Извлекаем структурированные данные из JSON-LD
+    event_date = None
+    is_free = None
+    location_name = None
+    event_name = None
+
+    for block in parser.json_ld_blocks:
+        try:
+            data = json.loads(block)
+            if data.get("@type") == "Event":
+                start = data.get("startDate", "")
+                if start:
+                    event_date = date_type.fromisoformat(start[:10])
+                event_name = data.get("name")
+                loc = data.get("location", {})
+                if isinstance(loc, dict):
+                    location_name = loc.get("name")
+                # Проверяем бесплатность
+                offers = data.get("offers", {})
+                if isinstance(offers, dict):
+                    price = offers.get("price")
+                    if price is not None:
+                        is_free = float(price) == 0
+        except Exception:
+            pass
+
     return {
         "link": link,
         "raw_text": "\n".join(parts),
         "chat_title": "baliforum.ru",
+        "event_date": event_date,
+        "is_free": is_free,
+        "summary": event_name or title,
+        "location": location_name,
     }
 
 
@@ -175,7 +207,10 @@ async def save_site_events(events: list[dict]) -> int:
                     link=event["link"],
                     raw_text=event["raw_text"],
                     text_hash=text_hash,
-                    status="pending"
+                    status="pending",
+                    event_date=event.get("event_date"),
+                    is_free=event.get("is_free"),
+                    summary=event.get("summary"),
                 )
                 session.add(new_event)
                 await session.commit()
