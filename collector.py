@@ -11,6 +11,66 @@ from database.models import AsyncSessionMaker, ScrapedEvent, init_db, compute_te
 from services.analyzer import run_batch_analysis, cleanup_old_events
 from services.link_checker import check_dead_links
 
+# Whitelist чатов — собираем ТОЛЬКО из них
+ALLOWED_CHATS = {
+    "balichatflood",
+    "balichatdating",
+    "balichat",
+    "balichatik",
+    "balichatparties",
+    "balichatfit",
+    "balichat_event",
+    "balichatsurfing",
+    "bali_party",
+    "balichat_canggu",
+    "balichatnash",
+    "balichat_amedlovina",
+    "blizkie_bali",
+    "networking_bali",
+    "balichat_ubud",
+    "balidances",
+    "balichatgilinow",
+    "businessmenBali",
+    "baliwomens",
+    "balichildren",
+    "balida21",
+    "balichat_photovideo",
+    "balichatkid",
+    "balibeauty",
+    "blizkie_eventss",
+    "balichat_bukit",
+    "cangguchat",
+    "balifm_media",
+    "bali_woman",
+    "pvbali",
+    "voprosBali",
+    "baliyoga",
+    "eventsbali",
+    "balifood",
+    "balibc",
+    "bali_afishaa",
+    "tantra_blizkie_bali",
+    "balifm_afisha",
+    "yoganabali",
+}
+
+
+# Приватные чаты без username — фильтруем по названию (частичное совпадение)
+ALLOWED_TITLES = {
+    "vizart",
+}
+
+
+def _is_allowed_chat(entity) -> bool:
+    """Проверяет, входит ли чат в whitelist (по username или по названию)."""
+    username = (getattr(entity, 'username', '') or '').lower()
+    if username in {c.lower() for c in ALLOWED_CHATS}:
+        return True
+    # Проверка по названию для приватных чатов
+    title = (getattr(entity, 'title', '') or '').lower()
+    return any(t in title for t in ALLOWED_TITLES)
+
+
 KEYWORDS_REGEX = re.compile(
     r"(бесплатн|free entry|free|donation|донейшн|вход свободн|"
     r"нетворкинг|networking|конференц|бизнес.?завтрак|бизнес.?встреча|"
@@ -62,7 +122,7 @@ async def scan_history(client: TelegramClient):
     
     dialogs_to_scan = []
     async for dialog in client.iter_dialogs():
-        if dialog.is_group or dialog.is_channel:
+        if (dialog.is_group or dialog.is_channel) and _is_allowed_chat(dialog.entity):
             dialogs_to_scan.append(dialog.entity)
     
     count_saved = 0
@@ -144,10 +204,10 @@ async def start_collector():
     result = await run_batch_analysis()
     logging.info(f"📊 {result}")
     
-    # Real-time мониторинг
+    # Real-time мониторинг — только whitelist
     dialogs_to_monitor = []
     async for dialog in client.iter_dialogs():
-        if dialog.is_group or dialog.is_channel:
+        if (dialog.is_group or dialog.is_channel) and _is_allowed_chat(dialog.entity):
             dialogs_to_monitor.append(dialog.entity)
     
     logging.info(f"📡 Real-time мониторинг {len(dialogs_to_monitor)} чатов...")
