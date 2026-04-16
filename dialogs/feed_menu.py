@@ -107,8 +107,20 @@ async def on_back_to_menu(callback: CallbackQuery, button: Button, manager: Dial
 async def get_events_menu_data(**kwargs):
     return {"title": "🎉 Афиша событий"}
 
+BUTTON_ID_TO_CATEGORY = {
+    "entertainment": "Развлечения",
+    "practices": "Практики",
+    "networking": "Нетворкинг",
+    "sport": "Спорт",
+    "travel": "Путешествия",
+    "creativity": "Творчество",
+    "education": "Образование",
+    "free_filter": "free_filter",
+    "All": "All",
+}
+
 async def on_category_selected(callback: CallbackQuery, button: Button, manager: DialogManager):
-    category = button.widget_id
+    category = BUTTON_ID_TO_CATEGORY.get(button.widget_id, button.widget_id)
     await log_action(callback.from_user.id, f"cat_{category}")
     manager.dialog_data["selected_category"] = category
     manager.dialog_data["events_mode"] = True
@@ -345,19 +357,19 @@ category_window = Window(
     StubScroll(id="events_pages", pages="pages"),
     Row(NumberedPager(scroll="events_pages")),
     Row(
-        Button(Const("🎭 Развлечения"), id="Развлечения", on_click=on_category_selected),
-        Button(Const("🧘 Практики"), id="Практики", on_click=on_category_selected),
+        Button(Const("🎭 Развлечения"), id="entertainment", on_click=on_category_selected),
+        Button(Const("🧘 Практики"), id="practices", on_click=on_category_selected),
     ),
     Row(
-        Button(Const("🤝 Нетворкинг"), id="Нетворкинг", on_click=on_category_selected),
-        Button(Const("⚽ Спорт"), id="Спорт", on_click=on_category_selected),
+        Button(Const("🤝 Нетворкинг"), id="networking", on_click=on_category_selected),
+        Button(Const("⚽ Спорт"), id="sport", on_click=on_category_selected),
     ),
     Row(
-        Button(Const("✈️ Путешествия"), id="Путешествия", on_click=on_category_selected),
-        Button(Const("🎨 Творчество"), id="Творчество", on_click=on_category_selected),
+        Button(Const("✈️ Путешествия"), id="travel", on_click=on_category_selected),
+        Button(Const("🎨 Творчество"), id="creativity", on_click=on_category_selected),
     ),
     Row(
-        Button(Const("🎓 Образование"), id="Образование", on_click=on_category_selected),
+        Button(Const("🎓 Образование"), id="education", on_click=on_category_selected),
         Button(Const("🆓 Бесплатно"), id="free_filter", on_click=on_category_selected),
     ),
     Button(Const("📋 Все"), id="All", on_click=on_category_selected),
