@@ -2,7 +2,7 @@ from enum import Enum
 
 
 class EventCategory(str, Enum):
-    """Тематические категории событий (7 штук)."""
+    """Тематические категории событий (8 штук)."""
     ENTERTAINMENT = "Развлечения"
     PRACTICES = "Практики"
     NETWORKING = "Нетворкинг"
@@ -10,6 +10,7 @@ class EventCategory(str, Enum):
     TRAVEL = "Путешествия"
     CREATIVITY = "Творчество"
     EDUCATION = "Образование"
+    NODATE = "Без даты"
 
 
 # Эмодзи для каждой тематической категории
@@ -21,6 +22,7 @@ CATEGORY_ICONS = {
     "Путешествия": "✈️",
     "Творчество": "🎨",
     "Образование": "🎓",
+    "Без даты": "📌",
     # legacy / служебные
     "Spam": "💩",
     "Unknown": "❓",

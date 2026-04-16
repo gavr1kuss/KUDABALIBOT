@@ -115,6 +115,7 @@ BUTTON_ID_TO_CATEGORY = {
     "travel": "Путешествия",
     "creativity": "Творчество",
     "education": "Образование",
+    "nodate": "Без даты",
     "free_filter": "free_filter",
     "All": "All",
 }
@@ -137,14 +138,18 @@ async def get_category_events(dialog_manager: DialogManager, **kwargs):
 
         if category == "free_filter":
             base_query = base_query.where(ScrapedEvent.is_free == True)
+        elif category == "Без даты":
+            base_query = base_query.where(ScrapedEvent.category.contains("Без даты"))
         elif category != "All":
             base_query = base_query.where(ScrapedEvent.category.contains(category))
         else:
             base_query = base_query.where(ScrapedEvent.category.notin_(["Spam", "Unknown", "Duplicate"]))
 
-        base_query = base_query.where(
-            or_(ScrapedEvent.event_date >= today, ScrapedEvent.event_date.is_(None))
-        )
+        # Для "Без даты" не фильтруем по дате — там все без дат
+        if category != "Без даты":
+            base_query = base_query.where(
+                or_(ScrapedEvent.event_date >= today, ScrapedEvent.event_date.is_(None))
+            )
 
         total_count = await session.scalar(select(func.count()).select_from(base_query.subquery()))
         total_pages = max(1, math.ceil((total_count or 0) / EVENTS_PER_PAGE))
@@ -172,7 +177,7 @@ async def get_category_events(dialog_manager: DialogManager, **kwargs):
             lines.append(f"📅 <b>{date_str}</b> {cat_icon}{price} <a href='{link}'>{summary}</a>")
         events_text = "\n\n".join(lines)
 
-    cat_name_map = {"All": "Все события", "free_filter": "🆓 Бесплатно"}
+    cat_name_map = {"All": "Все события", "free_filter": "🆓 Бесплатно", "Без даты": "📌 Без даты"}
     cat_name = cat_name_map.get(category, category)
     icon = "📋" if category in ("All", "free_filter") else CATEGORY_ICONS.get(category, "📁")
 
@@ -370,9 +375,12 @@ category_window = Window(
     ),
     Row(
         Button(Const("🎓 Образование"), id="education", on_click=on_category_selected),
-        Button(Const("🆓 Бесплатно"), id="free_filter", on_click=on_category_selected),
+        Button(Const("📌 Без даты"), id="nodate", on_click=on_category_selected),
     ),
-    Button(Const("📋 Все"), id="All", on_click=on_category_selected),
+    Row(
+        Button(Const("🆓 Бесплатно"), id="free_filter", on_click=on_category_selected),
+        Button(Const("📋 Все"), id="All", on_click=on_category_selected),
+    ),
     Button(Const("🏠 Меню"), id="back", on_click=on_back_to_menu),
     state=FeedMenuStates.category,
     getter=get_category_events,
