@@ -275,7 +275,7 @@ review_dialog = Dialog(
             "{% if is_recurring %}🔄 <b>Регулярное:</b> {{recurrence}}\n{% endif %}"
             "🔗 <a href='{{link}}'>Источник</a>\n\n"
             "📝 <b>Summary:</b>\n{{summary}}\n\n"
-            "📄 <b>Raw:</b>\n<tg-spoiler>{{raw}}</tg-spoiler>\n"
+            "📄 <b>Raw:</b>\n{{raw}}\n"
             "{% else %}"
             "✅ Очередь пуста\n"
             "{% endif %}"
