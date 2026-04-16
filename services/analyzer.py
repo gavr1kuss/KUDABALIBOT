@@ -269,18 +269,26 @@ async def run_batch_analysis(auto_approve: bool = False) -> str:
                         total_spam += 1
                         continue
 
+                    # Не перезатираем дату/цену/summary если они уже есть в записи
+                    # (например, site_parser уже достал из JSON-LD)
+                    update_values = {
+                        "status": target_status,
+                        "category": parsed["category"],
+                        "is_recurring": parsed["is_recurring"],
+                        "recurrence": parsed["recurrence"],
+                    }
+                    # AI-дата перезаписывает только если в записи ещё нет даты
+                    if parsed["event_date"] or not e.event_date:
+                        update_values["event_date"] = parsed["event_date"]
+                    if parsed["is_free"] is not None or e.is_free is None:
+                        update_values["is_free"] = parsed["is_free"]
+                    if parsed["summary"] or not e.summary:
+                        update_values["summary"] = parsed["summary"]
+
                     await session.execute(
                         update(ScrapedEvent)
                         .where(ScrapedEvent.id == e.id)
-                        .values(
-                            status=target_status,
-                            category=parsed["category"],
-                            is_free=parsed["is_free"],
-                            summary=parsed["summary"],
-                            event_date=parsed["event_date"],
-                            is_recurring=parsed["is_recurring"],
-                            recurrence=parsed["recurrence"],
-                        )
+                        .values(**update_values)
                     )
                     total_processed += 1
 
@@ -332,11 +340,15 @@ async def analyze_realtime_event(event_id: int) -> None:
             else:
                 ev.status = "review"
                 ev.category = parsed["category"]
-                ev.is_free = parsed["is_free"]
-                ev.summary = parsed["summary"]
-                ev.event_date = parsed["event_date"]
                 ev.is_recurring = parsed["is_recurring"]
                 ev.recurrence = parsed["recurrence"]
+                # Не перезатираем если уже есть (от site_parser)
+                if parsed["event_date"] or not ev.event_date:
+                    ev.event_date = parsed["event_date"]
+                if parsed["is_free"] is not None or ev.is_free is None:
+                    ev.is_free = parsed["is_free"]
+                if parsed["summary"] or not ev.summary:
+                    ev.summary = parsed["summary"]
 
             await session.commit()
             logging.info(f"📊 Realtime: {ev.id} -> {ev.status} [{ev.category}]")
