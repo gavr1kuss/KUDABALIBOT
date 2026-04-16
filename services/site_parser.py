@@ -25,37 +25,43 @@ async def parse_event_details(browser, link: str, attempt=1) -> dict | None:
         # Случайная задержка перед запросом
         await asyncio.sleep(random.uniform(0.5, 2.0))
         
-        await page.goto(link, timeout=45000, wait_until="domcontentloaded")
-        
-        # Проверка на ошибку 404/500
-        # (Playwright не кидает исключение на 404, надо проверять контент или статус, но goto возвращает response)
-        
+        await page.goto(link, timeout=60000, wait_until="networkidle")
+        # Ждём пока контент отрисуется (SPA)
+        await page.wait_for_timeout(3000)
+
         title = await page.title()
-        
+
+        # Пробуем дождаться конкретного контента
+        try:
+            await page.wait_for_selector('article, main, .event-detail, .event-info, [class*="event"]', timeout=5000)
+        except Exception:
+            pass  # Если не нашли — берём что есть
+
         content = await page.evaluate("""() => {
             const article = document.querySelector('article') || document.querySelector('main') || document.body;
-            return article.innerText;
+            return article ? article.innerText : '';
         }""")
-        
+
         json_ld = await page.evaluate("""() => {
             const scripts = document.querySelectorAll('script[type="application/ld+json"]');
-            // Собираем все JSON-LD блоки, вдруг их несколько
             return Array.from(scripts).map(s => s.innerText).join('\\n\\n');
         }""")
-        
+
         meta_description = await page.evaluate("""() => {
-            const meta = document.querySelector('meta[property="og:description"]');
+            const meta = document.querySelector('meta[property="og:description"]') || document.querySelector('meta[name="description"]');
             return meta ? meta.content : '';
         }""")
 
-        full_text = f"""
-        TITLE: {title}
-        LINK: {link}
-        JSON_LD: {json_ld}
-        META_DESC: {meta_description}
-        CONTENT:
-        {content[:4000]}
-        """
+        # Собираем все данные
+        parts = [f"TITLE: {title}", f"LINK: {link}"]
+        if json_ld and json_ld.strip():
+            parts.append(f"JSON_LD: {json_ld}")
+        if meta_description and meta_description.strip():
+            parts.append(f"META_DESC: {meta_description}")
+        if content and content.strip():
+            parts.append(f"CONTENT:\n{content[:4000]}")
+
+        full_text = "\n".join(parts)
         
         await page.close()
         return {
