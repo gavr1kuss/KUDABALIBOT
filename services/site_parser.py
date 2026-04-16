@@ -1,131 +1,152 @@
 import asyncio
 import logging
 import random
-from playwright.async_api import async_playwright
-from datetime import datetime, date, timedelta
+import aiohttp
+import re as _re
+from html.parser import HTMLParser
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 
 from database.models import AsyncSessionMaker, ScrapedEvent, compute_text_hash
 
 
-async def parse_event_details(browser, link: str, attempt=1) -> dict | None:
-    """Парсинг детальной страницы с повторными попытками"""
-    if attempt > 3:
-        logging.warning(f"💀 Сдаюсь после 3 попыток: {link}")
+class _MetaExtractor(HTMLParser):
+    """Извлекает title, meta-теги, JSON-LD и текст из HTML без JS-рендеринга."""
+
+    def __init__(self):
+        super().__init__()
+        self.title = ""
+        self.meta_desc = ""
+        self.og_title = ""
+        self.json_ld_blocks: list[str] = []
+        self.text_parts: list[str] = []
+        self._in_title = False
+        self._in_script_ld = False
+        self._in_body = False
+        self._skip_tags = {"script", "style", "noscript", "svg", "path"}
+        self._skip_depth = 0
+
+    def handle_starttag(self, tag, attrs):
+        d = dict(attrs)
+        if tag == "title":
+            self._in_title = True
+        elif tag == "meta":
+            if d.get("property") == "og:description" or d.get("name") == "description":
+                self.meta_desc = self.meta_desc or d.get("content", "")
+            if d.get("property") == "og:title":
+                self.og_title = d.get("content", "")
+        elif tag == "script" and d.get("type") == "application/ld+json":
+            self._in_script_ld = True
+        elif tag == "body":
+            self._in_body = True
+        elif tag in self._skip_tags:
+            self._skip_depth += 1
+
+    def handle_endtag(self, tag):
+        if tag == "title":
+            self._in_title = False
+        elif tag == "script":
+            self._in_script_ld = False
+        elif tag in self._skip_tags and self._skip_depth > 0:
+            self._skip_depth -= 1
+
+    def handle_data(self, data):
+        if self._in_title:
+            self.title += data
+        elif self._in_script_ld:
+            self.json_ld_blocks.append(data)
+        elif self._in_body and self._skip_depth == 0:
+            txt = data.strip()
+            if txt:
+                self.text_parts.append(txt)
+
+
+HEADERS = {
+    "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+                  "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+}
+
+
+async def parse_event_details_light(session: aiohttp.ClientSession, link: str) -> dict | None:
+    """Лёгкий парсинг страницы через aiohttp (без Playwright)."""
+    try:
+        await asyncio.sleep(random.uniform(0.3, 1.5))
+        async with session.get(link, headers=HEADERS, timeout=aiohttp.ClientTimeout(total=30)) as resp:
+            if resp.status != 200:
+                logging.warning(f"⚠️ HTTP {resp.status}: {link}")
+                return None
+            html = await resp.text()
+    except Exception as e:
+        logging.warning(f"⚠️ Ошибка загрузки {link}: {e}")
         return None
 
-    page = await browser.new_page()
-    # Маскируемся под обычного пользователя
-    await page.set_extra_http_headers({
-        "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
-    })
-
+    parser = _MetaExtractor()
     try:
-        # Случайная задержка перед запросом
-        await asyncio.sleep(random.uniform(0.5, 2.0))
-        
-        await page.goto(link, timeout=60000, wait_until="networkidle")
-        # Ждём пока контент отрисуется (SPA)
-        await page.wait_for_timeout(3000)
+        parser.feed(html)
+    except Exception:
+        pass
 
-        title = await page.title()
+    title = (parser.og_title or parser.title or "").strip()
+    meta = parser.meta_desc.strip()
+    json_ld = "\n".join(parser.json_ld_blocks).strip()
+    body_text = " ".join(parser.text_parts)[:4000]
 
-        # Пробуем дождаться конкретного контента
-        try:
-            await page.wait_for_selector('article, main, .event-detail, .event-info, [class*="event"]', timeout=5000)
-        except Exception:
-            pass  # Если не нашли — берём что есть
+    parts = [f"TITLE: {title}", f"LINK: {link}"]
+    if json_ld:
+        parts.append(f"JSON_LD: {json_ld}")
+    if meta:
+        parts.append(f"META_DESC: {meta}")
+    if body_text and len(body_text) > 20:
+        parts.append(f"CONTENT:\n{body_text}")
 
-        content = await page.evaluate("""() => {
-            const article = document.querySelector('article') || document.querySelector('main') || document.body;
-            return article ? article.innerText : '';
-        }""")
-
-        json_ld = await page.evaluate("""() => {
-            const scripts = document.querySelectorAll('script[type="application/ld+json"]');
-            return Array.from(scripts).map(s => s.innerText).join('\\n\\n');
-        }""")
-
-        meta_description = await page.evaluate("""() => {
-            const meta = document.querySelector('meta[property="og:description"]') || document.querySelector('meta[name="description"]');
-            return meta ? meta.content : '';
-        }""")
-
-        # Собираем все данные
-        parts = [f"TITLE: {title}", f"LINK: {link}"]
-        if json_ld and json_ld.strip():
-            parts.append(f"JSON_LD: {json_ld}")
-        if meta_description and meta_description.strip():
-            parts.append(f"META_DESC: {meta_description}")
-        if content and content.strip():
-            parts.append(f"CONTENT:\n{content[:4000]}")
-
-        full_text = "\n".join(parts)
-        
-        await page.close()
-        return {
-            "link": link,
-            "raw_text": full_text,
-            "chat_title": "baliforum.ru"
-        }
-
-    except Exception as e:
-        await page.close()
-        logging.warning(f"⚠️ Ошибка {link} (попытка {attempt}): {e}")
-        await asyncio.sleep(2 * attempt) # Пауза перед ретраем
-        return await parse_event_details(browser, link, attempt + 1)
+    return {
+        "link": link,
+        "raw_text": "\n".join(parts),
+        "chat_title": "baliforum.ru",
+    }
 
 
 async def parse_baliforum_events() -> list[dict]:
-    """Парсинг baliforum.ru"""
+    """Парсинг baliforum.ru — лёгкая версия через aiohttp."""
     events_data = []
-    
-    try:
-        async with async_playwright() as p:
-            browser = await p.chromium.launch(headless=True)
-            page = await browser.new_page()
-            
-            logging.info("📄 Открываем список событий...")
-            try:
-                await page.goto("https://baliforum.ru/events", timeout=60000)
-                await page.wait_for_timeout(3000)
-                
-                # Прокручиваем больше раз, чтобы собрать больше
-                for _ in range(3): 
-                    await page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
-                    await page.wait_for_timeout(2000)
-                
-                cards = await page.query_selector_all('a[href^="/events/"]')
-                links = set()
-                for card in cards:
-                    href = await card.get_attribute("href")
-                    if href and href != "/events":
-                        links.add(f"https://baliforum.ru{href}")
-                
-                logging.info(f"🔎 Найдено {len(links)} ссылок. Парсим детально...")
-            finally:
-                await page.close()
 
-            # Ограничиваем параллелизм, чтобы не забанили
-            semaphore = asyncio.Semaphore(4)
-            
+    try:
+        async with aiohttp.ClientSession() as session:
+            # 1. Получаем список ссылок с главной страницы
+            logging.info("📄 Загружаем список событий...")
+            try:
+                async with session.get(
+                    "https://baliforum.ru/events",
+                    headers=HEADERS,
+                    timeout=aiohttp.ClientTimeout(total=60),
+                ) as resp:
+                    html = await resp.text()
+            except Exception as e:
+                logging.error(f"❌ Не удалось загрузить список: {e}")
+                return []
+
+            # Ищем ссылки вида /events/slug
+            raw_links = set(_re.findall(r'href="(/events/[a-z0-9\-]+)"', html))
+            links = {f"https://baliforum.ru{href}" for href in raw_links if href != "/events"}
+            logging.info(f"🔎 Найдено {len(links)} ссылок. Парсим детально...")
+
+            # 2. Парсим каждую страницу (ограничиваем параллелизм)
+            semaphore = asyncio.Semaphore(6)
+
             async def protected_parse(link):
                 async with semaphore:
-                    res = await parse_event_details(browser, link)
+                    res = await parse_event_details_light(session, link)
                     if res:
                         logging.info(f"✅ OK: {link.split('/')[-1]}")
                     return res
 
             tasks = [protected_parse(link) for link in links]
             results = await asyncio.gather(*tasks)
-            
             events_data = [r for r in results if r is not None]
-            await browser.close()
-            
+
     except Exception as e:
         logging.error(f"❌ Критическая ошибка парсера: {e}")
-    
+
     return events_data
 
 
@@ -174,8 +195,6 @@ async def run_site_parser():
 
 
 if __name__ == "__main__":
-    # Уменьшаем шум от библиотек
-    logging.getLogger("playwright").setLevel(logging.WARNING)
     logging.basicConfig(
         level=logging.INFO,
         format="%(asctime)s - %(levelname)s - %(message)s"
