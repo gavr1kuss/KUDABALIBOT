@@ -166,28 +166,63 @@ async def on_date_selected(c: CallbackQuery, widget: Calendar, manager: DialogMa
     await manager.switch_to(AdminReviewSG.view)
 
 
-async def on_category_selected(c: CallbackQuery, widget: Select, manager: DialogManager, item_id: str):
+async def on_category_toggle(c: CallbackQuery, widget: Select, manager: DialogManager, item_id: str):
+    """Переключает категорию: если есть — убирает, если нет — добавляет."""
     event_id = _require_event_id(manager)
-    # Добавляем к существующим категориям, если ещё нет
     async with AsyncSessionMaker() as session:
         ev = await session.get(ScrapedEvent, event_id)
         if ev:
-            existing = set(c.strip() for c in (ev.category or "").split(",") if c.strip())
-            existing.add(item_id)
+            existing = set(x.strip() for x in (ev.category or "").split(",") if x.strip())
             # Убираем служебные
             existing.discard("Unknown")
             existing.discard("Spam")
             existing.discard("Duplicate")
-            new_cat = ",".join(sorted(existing))
+
+            if item_id in existing:
+                existing.discard(item_id)
+                action = "➖"
+            else:
+                existing.add(item_id)
+                action = "➕"
+
+            new_cat = ",".join(sorted(existing)) if existing else ""
             await update_event_category(session, event_id, new_cat)
-    await c.answer(f"✅ + {item_id}")
+    await c.answer(f"{action} {item_id}")
+    # НЕ переключаем окно — остаёмся в редакторе категорий для повторного выбора
+
+
+async def on_finish_category_edit(c: CallbackQuery, button: Button, manager: DialogManager):
     await manager.switch_to(AdminReviewSG.view)
 
 
-async def get_categories(**kwargs):
-    return {
-        "cats": [(f"{CATEGORY_ICONS.get(c.value, '')} {c.value}", c.value) for c in EventCategory]
-    }
+async def get_categories(dialog_manager: DialogManager, **kwargs):
+    """Возвращает список категорий с отметкой ✅ для уже выбранных."""
+    event_id = dialog_manager.dialog_data.get("event_id")
+    current = set()
+    current_display = "—"
+    if event_id:
+        async with AsyncSessionMaker() as session:
+            ev = await session.get(ScrapedEvent, int(event_id))
+            if ev and ev.category:
+                current = set(x.strip() for x in ev.category.split(",") if x.strip())
+                current_display = _format_categories(ev.category)
+
+    cats = []
+    for c in EventCategory:
+        icon = CATEGORY_ICONS.get(c.value, "")
+        mark = "✅ " if c.value in current else "⬜ "
+        label = f"{mark}{icon} {c.value}"
+        cats.append((label, c.value))
+    return {"cats": cats, "current": current_display}
+
+
+async def get_categories_simple(**kwargs):
+    """Простой список категорий (для окна создания события)."""
+    cats = [
+        (f"{CATEGORY_ICONS.get(c.value, '')} {c.value}", c.value)
+        for c in EventCategory
+    ]
+    return {"cats": cats}
 
 
 # ---------- PRICE EDIT ----------
@@ -324,19 +359,22 @@ review_dialog = Dialog(
         state=AdminReviewSG.edit_date,
     ),
 
-    # --- Редактирование категории (добавляет к существующим) ---
+    # --- Редактирование категорий (чекбоксы, можно тоггливать) ---
     Window(
-        Const("📂 Выбери категорию (добавится к текущим):"),
-        Select(
-            Format("{item[0]}"),
-            id="cat_edit",
-            items="cats",
-            item_id_getter=operator.itemgetter(1),
-            on_click=on_category_selected,
+        Format("📂 <b>Категории</b>\n\nСейчас: {current}\n\nНажми чтобы добавить/убрать:"),
+        Column(
+            Select(
+                Format("{item[0]}"),
+                id="cat_toggle",
+                items="cats",
+                item_id_getter=operator.itemgetter(1),
+                on_click=on_category_toggle,
+            ),
         ),
-        SwitchTo(Const("🔙 Назад"), id="back4", state=AdminReviewSG.view),
+        Button(Const("✅ Готово"), id="cat_done", on_click=on_finish_category_edit),
         state=AdminReviewSG.edit_category,
         getter=get_categories,
+        parse_mode="HTML",
     ),
 
     # --- Редактирование цены ---
@@ -388,15 +426,17 @@ create_dialog = Dialog(
 
     Window(
         Const("📂 Выбери категорию:"),
-        Select(
-            Format("{item[0]}"),
-            id="cat_new",
-            items="cats",
-            item_id_getter=operator.itemgetter(1),
-            on_click=on_create_category_selected,
+        Column(
+            Select(
+                Format("{item[0]}"),
+                id="cat_new",
+                items="cats",
+                item_id_getter=operator.itemgetter(1),
+                on_click=on_create_category_selected,
+            ),
         ),
         Cancel(Const("✖ Отмена")),
         state=AdminCreateSG.category,
-        getter=get_categories,
+        getter=get_categories_simple,
     ),
 )
