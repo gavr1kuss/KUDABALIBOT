@@ -191,8 +191,18 @@ async def get_category_events(dialog_manager: DialogManager, **kwargs):
 
 
 # === AI CHAT ===
-async def get_ai_chat_data(**kwargs):
-    return {"prompt": "💬 Спроси меня о Бали!\n\nНапример:\n• Где лучший кофе в Чангу?\n• Какой пляж для серфинга?\n• Где работать с ноутбуком?"}
+async def get_ai_chat_data(dialog_manager: DialogManager, **kwargs):
+    history = dialog_manager.dialog_data.get("chat_history", [])
+    # Плашка с примерами — только при первом заходе (пустая история)
+    show_intro = not history
+    intro_text = (
+        "💬 Спроси меня о Бали!\n\n"
+        "Например:\n"
+        "• Где лучший кофе в Чангу?\n"
+        "• Какой пляж для серфинга?\n"
+        "• Где работать с ноутбуком?"
+    ) if show_intro else ""
+    return {"prompt": intro_text, "show_intro": show_intro}
 
 async def on_ai_message(message: Message, widget: MessageInput, manager: DialogManager):
     user_text = message.text or ""
@@ -388,7 +398,8 @@ category_window = Window(
 )
 
 ai_chat_window = Window(
-    Format("{prompt}"),
+    Format("{prompt}", when="show_intro"),
+    Const("💬 Продолжай спрашивать", when=lambda data, w, m: not data.get("show_intro")),
     MessageInput(on_ai_message),
     Button(Const("🏠 Меню"), id="back", on_click=on_back_to_menu),
     state=FeedMenuStates.ai_chat,
