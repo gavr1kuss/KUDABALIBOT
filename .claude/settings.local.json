@@ -6,7 +6,17 @@
       "Bash(python -c 'import ast; ast.parse\\(open\\('\\\\''__TRACKED_VAR__'\\\\'', encoding='\\\\''utf-8'\\\\''\\).read\\(\\)\\)')",
       "Bash(ls \"C:/Users/mikos/OneDrive/Рабочий стол/KUDABALIBOT-main\"/*.db)",
       "Bash(grep -iE '\\\\.db$|\\\\.sqlite')",
-      "Bash(python -c ':*)"
+      "Bash(python -c ':*)",
+      "Bash(npm install *)",
+      "Bash(ruflo --version)",
+      "Bash(npm list *)",
+      "Bash(npm bin *)",
+      "Bash(/c/Users/mikos/AppData/Roaming/npm/ruflo.cmd --version)",
+      "Bash(/c/Users/mikos/AppData/Roaming/npm/claude-flow.cmd --version)",
+      "Bash(ssh root@bali \"cat /opt/kudabali/services/extra_sites_parser.py\")",
+      "Read(//c/c/Users/mikos/OneDrive/Рабочий стол/KUDABALIBOT-main/**)",
+      "Read(//c/c/Users/mikos/OneDrive/Рабочий стол/**)",
+      "Bash(python -c ' *)"
     ]
   }
 }

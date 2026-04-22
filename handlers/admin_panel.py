@@ -1,14 +1,9 @@
 from aiogram import Router
 from database.models import AsyncSessionMaker, ScrapedEvent
 from sqlalchemy import delete
-from datetime import date
 import json
 from pathlib import Path
-from database.models import AsyncSessionMaker, ScrapedEvent
-from sqlalchemy import delete
-from datetime import date
-import json
-from pathlib import Path
+from utils.timez import bali_today
 from aiogram.filters import Command
 from aiogram.types import Message
 from aiogram_dialog import DialogManager, StartMode
@@ -50,13 +45,12 @@ async def cmd_add(message: Message, dialog_manager: DialogManager):
 async def cmd_clean_old(message: Message):
     """Удалить устаревшие события из review"""
     from sqlalchemy import delete
-    from datetime import date
     
     async with AsyncSessionMaker() as session:
         result = await session.execute(
             delete(ScrapedEvent)
             .where(ScrapedEvent.status == "review")
-            .where(ScrapedEvent.event_date < date.today())
+            .where(ScrapedEvent.event_date < bali_today())
         )
         await session.commit()
         await message.answer(f"🗑 Удалено {result.rowcount} устаревших событий из review")
@@ -113,14 +107,13 @@ async def cmd_add_mention(message: Message):
 async def cmd_clean_old(message: Message):
     """Удалить устаревшие события из review"""
     from sqlalchemy import delete
-    from datetime import date
     from database.models import AsyncSessionMaker, ScrapedEvent
     
     async with AsyncSessionMaker() as session:
         result = await session.execute(
             delete(ScrapedEvent)
             .where(ScrapedEvent.status == "review")
-            .where(ScrapedEvent.event_date < date.today())
+            .where(ScrapedEvent.event_date < bali_today())
         )
         await session.commit()
         await message.answer(f"🗑 Удалено {result.rowcount} устаревших событий из review")

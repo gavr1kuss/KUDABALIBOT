@@ -7,9 +7,9 @@ from aiogram_dialog.widgets.kbd import Button, Row, Column, StubScroll, Numbered
 from aiogram_dialog.widgets.media import StaticMedia
 from aiogram_dialog.widgets.input import MessageInput
 from sqlalchemy import select, func, or_
-from datetime import date
 
 from database.models import AsyncSessionMaker, ScrapedEvent, User, UserAction, compute_text_hash
+from utils.timez import bali_today
 from data.categories import CATEGORY_ICONS
 from states import FeedMenuStates
 from services.ai_assistant import get_ai_response
@@ -133,7 +133,7 @@ async def get_category_events(dialog_manager: DialogManager, **kwargs):
     page = await scroll.get_page() if scroll else 0
 
     async with AsyncSessionMaker() as session:
-        today = date.today()
+        today = bali_today()
         base_query = select(ScrapedEvent).where(ScrapedEvent.status == "approved")
 
         if category == "free_filter":

@@ -129,10 +129,11 @@ KUDABALI: "Бюджет? Район? Кухня?
 async def get_upcoming_events(query: str) -> str:
     """Загружает ближайшие события из афиши"""
     from sqlalchemy import select, or_
-    from datetime import date, timedelta
+    from datetime import timedelta
     from database.models import AsyncSessionMaker, ScrapedEvent
-    
-    today = date.today()
+    from utils.timez import bali_today
+
+    today = bali_today()
     week_later = today + timedelta(days=7)
     
     # Извлекаем дату из запроса если есть

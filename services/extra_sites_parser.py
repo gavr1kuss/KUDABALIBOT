@@ -1,19 +1,59 @@
 import asyncio
+import os
+import logging
 import aiohttp
 import hashlib
-from datetime import date, timedelta, datetime
+from datetime import timedelta, datetime
+from zoneinfo import ZoneInfo
+from dotenv import load_dotenv
 from sqlalchemy import select
 from database.models import AsyncSessionMaker as async_session, ScrapedEvent
 
-BALIEVENTS_URL = "https://uyueqyedxphgdkaiwwsj.supabase.co/rest/v1/public_events"
-BALIEVENTS_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InV5dWVxeWVkeHBoZ2RrYWl3d3NqIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NDcxMzgxNzMsImV4cCI6MjA2MjcxNDE3M30.ZjOlKUcEQDlFp9S3jeTwRqcINcOrz6z-5wClJvLkjXA"
+load_dotenv()
+log = logging.getLogger(__name__)
 
-APPBALI_URL = "https://wbwgwytdqubtrdxfbjrr.supabase.co/rest/v1/events"
-APPBALI_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Indid2d3eXRkcXVidHJkeGZianJyIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NTE1NjIyMzAsImV4cCI6MjA2NzEzODIzMH0.NwPXF8UYbOqhjxUka0kzb47IPgx146_7V7Ats4IUDUs"
+BALI_TZ = ZoneInfo("Asia/Makassar")
+
+BALIEVENTS_URL = os.getenv("BALIEVENTS_URL", "https://uyueqyedxphgdkaiwwsj.supabase.co/rest/v1/public_events")
+BALIEVENTS_KEY = os.getenv("BALIEVENTS_KEY", "")
+
+APPBALI_URL = os.getenv("APPBALI_URL", "https://wbwgwytdqubtrdxfbjrr.supabase.co/rest/v1/events")
+APPBALI_KEY = os.getenv("APPBALI_KEY", "")
+
+MAX_RETRIES = 3
+RETRY_BACKOFF = 2.0
+
+
+def _bali_today():
+    return datetime.now(BALI_TZ).date()
+
+
+async def _get_json(session, url, headers, params):
+    last_exc = None
+    for attempt in range(MAX_RETRIES):
+        try:
+            async with session.get(url, headers=headers, params=params, timeout=aiohttp.ClientTimeout(total=30)) as r:
+                if r.status >= 500:
+                    raise aiohttp.ClientResponseError(r.request_info, r.history, status=r.status, message=await r.text())
+                if r.status != 200:
+                    txt = await r.text()
+                    log.error("GET %s failed %s: %s", url, r.status, txt[:300])
+                    return None
+                return await r.json()
+        except (aiohttp.ClientError, asyncio.TimeoutError) as e:
+            last_exc = e
+            wait = RETRY_BACKOFF * (attempt + 1)
+            log.warning("GET %s attempt %s/%s failed: %s — retry in %ss", url, attempt + 1, MAX_RETRIES, e, wait)
+            await asyncio.sleep(wait)
+    log.error("GET %s gave up after %s attempts: %s", url, MAX_RETRIES, last_exc)
+    return None
 
 
 async def fetch_balievents(session):
-    today = date.today()
+    if not BALIEVENTS_KEY:
+        log.error("BALIEVENTS_KEY not set in .env")
+        return []
+    today = _bali_today()
     week_ahead = today + timedelta(days=7)
     headers = {"apikey": BALIEVENTS_KEY, "Authorization": f"Bearer {BALIEVENTS_KEY}"}
     params = {
@@ -22,8 +62,12 @@ async def fetch_balievents(session):
         "in_review": "eq.false",
         "limit": "1000",
     }
-    async with session.get(BALIEVENTS_URL, headers=headers, params=params) as r:
-        data = await r.json()
+    data = await _get_json(session, BALIEVENTS_URL, headers, params)
+    if data is None:
+        return []
+    if not isinstance(data, list):
+        log.error("balievents.co: unexpected response shape: %r", data)
+        return []
     events = []
     for ev in data:
         title = ev.get("title") or ""
@@ -36,8 +80,8 @@ async def fetch_balievents(session):
         if ts:
             try:
                 base_dt = datetime.fromisoformat(ts.replace("Z", "+00:00"))
-            except Exception:
-                base_dt = None
+            except ValueError as e:
+                log.warning("balievents.co: bad event_timestamp %r: %s", ts, e)
         occurrences = []
         if freq == "daily":
             for i in range(7):
@@ -63,7 +107,10 @@ async def fetch_balievents(session):
 
 
 async def fetch_app_bali(session):
-    today = date.today()
+    if not APPBALI_KEY:
+        log.error("APPBALI_KEY not set in .env")
+        return []
+    today = _bali_today()
     week_ahead = today + timedelta(days=7)
     headers = {"apikey": APPBALI_KEY, "Authorization": f"Bearer {APPBALI_KEY}"}
     params = [
@@ -74,8 +121,12 @@ async def fetch_app_bali(session):
         ("order", "event_date.asc,event_sort_id.asc"),
         ("limit", "1000"),
     ]
-    async with session.get(APPBALI_URL, headers=headers, params=params) as r:
-        data = await r.json()
+    data = await _get_json(session, APPBALI_URL, headers, params)
+    if data is None:
+        return []
+    if not isinstance(data, list):
+        log.error("app.bali.com: unexpected response shape: %r", data)
+        return []
     events = []
     for ev in data:
         title = ev.get("event_name") or ""
@@ -83,10 +134,12 @@ async def fetch_app_bali(session):
         slug = ev.get("event_url_slug") or ev.get("id")
         link = f"https://app.bali.com/events/{slug}"
         evd_raw = ev.get("event_date")
-        try:
-            evd = date.fromisoformat(evd_raw) if evd_raw else None
-        except Exception:
-            evd = None
+        evd = None
+        if evd_raw:
+            try:
+                evd = datetime.fromisoformat(evd_raw).date() if "T" in evd_raw else datetime.strptime(evd_raw, "%Y-%m-%d").date()
+            except ValueError as e:
+                log.warning("app.bali.com: bad event_date %r: %s", evd_raw, e)
         events.append({
             "chat_title": "app.bali.com",
             "link": link,
@@ -119,6 +172,7 @@ async def save_events(events):
 
 
 async def main():
+    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
     async with aiohttp.ClientSession() as session:
         be = await fetch_balievents(session)
         ab = await fetch_app_bali(session)

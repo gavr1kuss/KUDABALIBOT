@@ -1,12 +1,23 @@
+import asyncio
 import json
 import logging
 import re
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
+from zoneinfo import ZoneInfo
 from sqlalchemy import select, update, delete, and_
-from openai import AsyncOpenAI
+from openai import AsyncOpenAI, APIError, APITimeoutError, APIConnectionError
 from database.models import AsyncSessionMaker, ScrapedEvent, compute_text_hash
 from data.categories import VALID_CATEGORIES
 from config import config
+
+log = logging.getLogger(__name__)
+
+BALI_TZ = ZoneInfo("Asia/Makassar")
+
+
+def bali_today() -> date:
+    return datetime.now(BALI_TZ).date()
+
 
 client = AsyncOpenAI(
     api_key=config.deepseek_api_key.get_secret_value(),
@@ -14,9 +25,11 @@ client = AsyncOpenAI(
 )
 
 BATCH_SIZE = 20
-RECURRING_WEEKS_AHEAD = 3  # На сколько недель вперёд создавать регулярные события
+RECURRING_WEEKS_AHEAD = 3
 
-# Сообщения от этих ботов — автоматически спам
+DEEPSEEK_RETRIES = 3
+DEEPSEEK_BACKOFF = 3.0
+
 BOT_PATTERNS = re.compile(r'@BaliForumRuBot|@BaliChatBot|@BaliInfoBot|via @\w+Bot', re.IGNORECASE)
 
 PROMPT = """Ты — редактор афиши мероприятий на Бали. Классифицируй каждое сообщение.
@@ -72,17 +85,27 @@ DATA_PLACEHOLDER
 
 
 async def call_deepseek(prompt: str) -> str:
-    try:
-        response = await client.chat.completions.create(
-            model=config.deepseek_model,
-            messages=[{"role": "user", "content": prompt}],
-            temperature=0.1,
-            max_tokens=4000
-        )
-        return response.choices[0].message.content or ""
-    except Exception as e:
-        logging.error(f"DeepSeek Error: {e}")
-        return ""
+    last_exc = None
+    for attempt in range(DEEPSEEK_RETRIES):
+        try:
+            response = await client.chat.completions.create(
+                model=config.deepseek_model,
+                messages=[{"role": "user", "content": prompt}],
+                temperature=0.1,
+                max_tokens=4000,
+                timeout=60,
+            )
+            return response.choices[0].message.content or ""
+        except (APITimeoutError, APIConnectionError, APIError) as exc:
+            last_exc = exc
+            wait = DEEPSEEK_BACKOFF * (attempt + 1)
+            log.warning("DeepSeek attempt %s/%s failed: %s — retry in %ss", attempt + 1, DEEPSEEK_RETRIES, exc, wait)
+            await asyncio.sleep(wait)
+        except Exception as exc:
+            log.error("DeepSeek non-retryable error: %s", exc)
+            return ""
+    log.error("DeepSeek gave up after %s attempts: %s", DEEPSEEK_RETRIES, last_exc)
+    return ""
 
 
 def parse_event_date(date_str: str | None) -> date | None:
@@ -90,12 +113,12 @@ def parse_event_date(date_str: str | None) -> date | None:
         return None
     try:
         return date.fromisoformat(date_str)
-    except Exception:
+    except ValueError:
+        log.warning("Bad event_date from AI: %r", date_str)
         return None
 
 
 def normalize_categories(raw_cats) -> str:
-    """Нормализует категории из ответа AI → строку через запятую."""
     if isinstance(raw_cats, str):
         cats = [c.strip() for c in raw_cats.split(",")]
     elif isinstance(raw_cats, list):
@@ -108,7 +131,6 @@ def normalize_categories(raw_cats) -> str:
 
 
 def parse_recurrence(raw) -> str | None:
-    """Нормализует дни недели из ответа AI."""
     if not raw:
         return None
     valid_days = {"mon", "tue", "wed", "thu", "fri", "sat", "sun"}
@@ -122,7 +144,6 @@ def parse_recurrence(raw) -> str | None:
 
 
 async def check_dedup(session, summary: str, event_date: date | None) -> bool:
-    """Проверка дедупликации по summary + event_date."""
     if not summary or not event_date:
         return False
     result = await session.execute(
@@ -138,16 +159,14 @@ async def check_dedup(session, summary: str, event_date: date | None) -> bool:
 
 
 async def cleanup_old_events():
-    """Удаление прошедших событий (кроме регулярных)."""
-    today = date.today()
+    today = bali_today()
     async with AsyncSessionMaker() as session:
         result = await session.execute(
             delete(ScrapedEvent)
             .where(ScrapedEvent.event_date < today)
-            .where(ScrapedEvent.parent_id.is_(None))  # Не трогать дочерние пока
+            .where(ScrapedEvent.parent_id.is_(None))
             .where(ScrapedEvent.event_date.isnot(None))
         )
-        # Удаляем и дочерние прошедшие
         result2 = await session.execute(
             delete(ScrapedEvent)
             .where(ScrapedEvent.event_date < today)
@@ -157,11 +176,10 @@ async def cleanup_old_events():
         await session.commit()
         total = (result.rowcount or 0) + (result2.rowcount or 0)
         if total:
-            logging.info(f"🗑 Удалено прошедших: {total}")
+            log.info("🗑 Удалено прошедших: %s", total)
 
 
 def _apply_ai_result(res: dict) -> dict:
-    """Извлекает и нормализует поля из ответа AI."""
     return {
         "category": normalize_categories(res.get("categories", res.get("category", "Развлечения"))),
         "is_free": res.get("is_free"),
@@ -173,11 +191,6 @@ def _apply_ai_result(res: dict) -> dict:
 
 
 async def run_batch_analysis(auto_approve: bool = False) -> str:
-    """
-    Анализ pending событий.
-    auto_approve=True -> сразу в approved (первичный сбор)
-    auto_approve=False -> в review (на модерацию)
-    """
     await cleanup_old_events()
 
     async with AsyncSessionMaker() as session:
@@ -190,22 +203,23 @@ async def run_batch_analysis(auto_approve: bool = False) -> str:
             return "📭 Нет новых сообщений."
 
         total = len(batch)
-        logging.info(f"📊 Pending: {total}")
+        log.info("📊 Pending: %s", total)
 
-        current_date = date.today().isoformat()
+        current_date = bali_today().isoformat()
         total_processed = 0
         total_spam = 0
+        total_duplicates = 0
         total_errors = 0
 
         target_status = "approved" if auto_approve else "review"
 
         for i in range(0, total, BATCH_SIZE):
             chunk = batch[i:i + BATCH_SIZE]
+            chunk_ids = [e.id for e in chunk]
 
             data_for_ai = []
             for e in chunk:
                 raw_text = e.raw_text or ""
-                # Авто-реджект сообщений от ботов
                 if BOT_PATTERNS.search(raw_text):
                     await session.execute(
                         update(ScrapedEvent)
@@ -219,142 +233,162 @@ async def run_batch_analysis(auto_approve: bool = False) -> str:
                 text = re.sub(r'\s+', ' ', raw_text[:500]).strip()
                 data_for_ai.append({"id": e.id, "text": text, "posted": posted})
 
-            # Если все в чанке отсеялись как боты — коммитим и идём дальше
             if not data_for_ai:
                 await session.commit()
                 continue
 
-            try:
-                prompt = (
-                    PROMPT
-                    .replace("TODAY_PLACEHOLDER", current_date)
-                    .replace("DATA_PLACEHOLDER", json.dumps(data_for_ai, ensure_ascii=False))
-                )
-                raw = await call_deepseek(prompt)
+            prompt = (
+                PROMPT
+                .replace("TODAY_PLACEHOLDER", current_date)
+                .replace("DATA_PLACEHOLDER", json.dumps(data_for_ai, ensure_ascii=False))
+            )
+            raw = await call_deepseek(prompt)
 
-                match = re.search(r'\[.*\]', raw.replace('\n', ' '), re.DOTALL)
-                if not match:
-                    logging.warning("No JSON in response")
+            if not raw:
+                log.error("DeepSeek returned empty for chunk ids=%s", chunk_ids)
+                total_errors += len(data_for_ai)
+                continue
+
+            match = re.search(r'\[.*\]', raw.replace('\n', ' '), re.DOTALL)
+            if not match:
+                log.error("No JSON array in DeepSeek response for chunk ids=%s; raw[:500]=%r", chunk_ids, raw[:500])
+                total_errors += len(data_for_ai)
+                continue
+
+            try:
+                ai_results = json.loads(match.group(0))
+            except json.JSONDecodeError as exc:
+                log.error("JSON parse failed for chunk ids=%s: %s; raw[:500]=%r", chunk_ids, exc, match.group(0)[:500])
+                total_errors += len(data_for_ai)
+                continue
+
+            if not isinstance(ai_results, list):
+                log.error("AI returned non-list for chunk ids=%s: %r", chunk_ids, ai_results)
+                total_errors += len(data_for_ai)
+                continue
+
+            results_map = {item.get("id"): item for item in ai_results if isinstance(item, dict)}
+
+            for e in chunk:
+                res = results_map.get(e.id)
+
+                if not res:
+                    log.warning("AI did not return result for id=%s", e.id)
+                    total_errors += 1
                     continue
 
-                ai_results = json.loads(match.group(0))
-                results_map = {item.get("id"): item for item in ai_results}
-
-                for e in chunk:
-                    res = results_map.get(e.id)
-
-                    if not res:
-                        total_errors += 1
-                        continue
-
+                try:
                     parsed = _apply_ai_result(res)
+                except Exception as exc:
+                    log.error("Failed to apply AI result for id=%s: %s; res=%r", e.id, exc, res)
+                    total_errors += 1
+                    continue
 
-                    # Спам
-                    if "Spam" in (parsed["category"] or ""):
-                        await session.execute(
-                            update(ScrapedEvent)
-                            .where(ScrapedEvent.id == e.id)
-                            .values(status="rejected", category="Spam")
-                        )
-                        total_spam += 1
-                        continue
-
-                    # Дедупликация
-                    if await check_dedup(session, parsed["summary"], parsed["event_date"]):
-                        await session.execute(
-                            update(ScrapedEvent)
-                            .where(ScrapedEvent.id == e.id)
-                            .values(status="rejected", category="Duplicate")
-                        )
-                        total_spam += 1
-                        continue
-
-                    # Не перезатираем дату/цену/summary если они уже есть в записи
-                    # (например, site_parser уже достал из JSON-LD)
-                    update_values = {
-                        "status": target_status,
-                        "category": parsed["category"],
-                        "is_recurring": parsed["is_recurring"],
-                        "recurrence": parsed["recurrence"],
-                    }
-                    # AI-дата перезаписывает только если в записи ещё нет даты
-                    if parsed["event_date"] or not e.event_date:
-                        update_values["event_date"] = parsed["event_date"]
-                    if parsed["is_free"] is not None or e.is_free is None:
-                        update_values["is_free"] = parsed["is_free"]
-                    if parsed["summary"] or not e.summary:
-                        update_values["summary"] = parsed["summary"]
-
+                if "Spam" in (parsed["category"] or ""):
                     await session.execute(
                         update(ScrapedEvent)
                         .where(ScrapedEvent.id == e.id)
-                        .values(**update_values)
+                        .values(status="rejected", category="Spam")
                     )
-                    total_processed += 1
+                    total_spam += 1
+                    continue
 
-                await session.commit()
+                if await check_dedup(session, parsed["summary"], parsed["event_date"]):
+                    await session.execute(
+                        update(ScrapedEvent)
+                        .where(ScrapedEvent.id == e.id)
+                        .values(status="rejected", category="Duplicate")
+                    )
+                    total_duplicates += 1
+                    continue
 
-            except Exception as e:
-                logging.error(f"Chunk error: {e}")
-                total_errors += len(chunk)
+                update_values = {
+                    "status": target_status,
+                    "category": parsed["category"],
+                    "is_recurring": parsed["is_recurring"],
+                    "recurrence": parsed["recurrence"],
+                }
+                if parsed["event_date"] or not e.event_date:
+                    update_values["event_date"] = parsed["event_date"]
+                if parsed["is_free"] is not None or e.is_free is None:
+                    update_values["is_free"] = parsed["is_free"]
+                if parsed["summary"] or not e.summary:
+                    update_values["summary"] = parsed["summary"]
+
+                await session.execute(
+                    update(ScrapedEvent)
+                    .where(ScrapedEvent.id == e.id)
+                    .values(**update_values)
+                )
+                total_processed += 1
+
+            await session.commit()
 
         status_word = "Одобрено" if auto_approve else "На модерацию"
-        return f"✅ {status_word}: {total_processed}, Спам: {total_spam}, Ошибок: {total_errors}"
+        return f"✅ {status_word}: {total_processed}, Спам: {total_spam}, Дубли: {total_duplicates}, Ошибок: {total_errors}"
 
 
 async def analyze_realtime_event(event_id: int) -> None:
-    """Анализ одного события в реальном времени -> review."""
     async with AsyncSessionMaker() as session:
         ev = await session.get(ScrapedEvent, event_id)
         if not ev or ev.status != "pending":
             return
 
         text = re.sub(r'\s+', ' ', (ev.raw_text or "")[:500]).strip()
-        posted = ev.created_at.strftime("%Y-%m-%d") if ev.created_at else date.today().isoformat()
+        posted = ev.created_at.strftime("%Y-%m-%d") if ev.created_at else bali_today().isoformat()
 
         data = [{"id": ev.id, "text": text, "posted": posted}]
         prompt = (
             PROMPT
-            .replace("TODAY_PLACEHOLDER", date.today().isoformat())
+            .replace("TODAY_PLACEHOLDER", bali_today().isoformat())
             .replace("DATA_PLACEHOLDER", json.dumps(data, ensure_ascii=False))
         )
 
+        raw = await call_deepseek(prompt)
+        if not raw:
+            log.error("Realtime: empty DeepSeek response for id=%s", ev.id)
+            return
+
+        match = re.search(r'\[.*\]', raw.replace('\n', ' '), re.DOTALL)
+        if not match:
+            log.error("Realtime: no JSON array for id=%s; raw[:500]=%r", ev.id, raw[:500])
+            return
+
         try:
-            raw = await call_deepseek(prompt)
-            match = re.search(r'\[.*\]', raw.replace('\n', ' '), re.DOTALL)
-            if not match:
-                return
-
             ai_results = json.loads(match.group(0))
-            if not ai_results:
-                return
+        except json.JSONDecodeError as exc:
+            log.error("Realtime: JSON parse failed for id=%s: %s", ev.id, exc)
+            return
 
+        if not ai_results:
+            return
+
+        try:
             parsed = _apply_ai_result(ai_results[0])
+        except Exception as exc:
+            log.error("Realtime: apply result failed for id=%s: %s", ev.id, exc)
+            return
 
-            if "Spam" in (parsed["category"] or ""):
-                ev.status = "rejected"
-                ev.category = "Spam"
-            elif await check_dedup(session, parsed["summary"], parsed["event_date"]):
-                ev.status = "rejected"
-                ev.category = "Duplicate"
-            else:
-                ev.status = "review"
-                ev.category = parsed["category"]
-                ev.is_recurring = parsed["is_recurring"]
-                ev.recurrence = parsed["recurrence"]
-                # Не перезатираем если уже есть (от site_parser)
-                if parsed["event_date"] or not ev.event_date:
-                    ev.event_date = parsed["event_date"]
-                if parsed["is_free"] is not None or ev.is_free is None:
-                    ev.is_free = parsed["is_free"]
-                if parsed["summary"] or not ev.summary:
-                    ev.summary = parsed["summary"]
+        if "Spam" in (parsed["category"] or ""):
+            ev.status = "rejected"
+            ev.category = "Spam"
+        elif await check_dedup(session, parsed["summary"], parsed["event_date"]):
+            ev.status = "rejected"
+            ev.category = "Duplicate"
+        else:
+            ev.status = "review"
+            ev.category = parsed["category"]
+            ev.is_recurring = parsed["is_recurring"]
+            ev.recurrence = parsed["recurrence"]
+            if parsed["event_date"] or not ev.event_date:
+                ev.event_date = parsed["event_date"]
+            if parsed["is_free"] is not None or ev.is_free is None:
+                ev.is_free = parsed["is_free"]
+            if parsed["summary"] or not ev.summary:
+                ev.summary = parsed["summary"]
 
-            await session.commit()
-            logging.info(f"📊 Realtime: {ev.id} -> {ev.status} [{ev.category}]")
-
-        except Exception as e:
-            logging.error(f"Realtime analyze error: {e}")
+        await session.commit()
+        log.info("📊 Realtime: %s -> %s [%s]", ev.id, ev.status, ev.category)
 
 
 # ---------- Регулярные события ----------
@@ -363,10 +397,6 @@ DAY_MAP = {"mon": 0, "tue": 1, "wed": 2, "thu": 3, "fri": 4, "sat": 5, "sun": 6}
 
 
 async def create_recurring_entries(parent_id: int, weeks: int = RECURRING_WEEKS_AHEAD) -> int:
-    """
-    Из одного регулярного события (parent) создаёт конкретные записи
-    на N недель вперёд. Возвращает количество созданных записей.
-    """
     async with AsyncSessionMaker() as session:
         parent = await session.get(ScrapedEvent, parent_id)
         if not parent or not parent.recurrence:
@@ -378,22 +408,19 @@ async def create_recurring_entries(parent_id: int, weeks: int = RECURRING_WEEKS_
         if not day_numbers:
             return 0
 
-        today = date.today()
+        today = bali_today()
         created = 0
 
         for week_offset in range(weeks):
             for day_num in day_numbers:
-                # Вычисляем дату: текущая неделя + offset, нужный день
                 days_ahead = day_num - today.weekday()
                 if days_ahead < 0:
                     days_ahead += 7
                 target_date = today + timedelta(days=days_ahead + 7 * week_offset)
 
-                # Не создаём в прошлом
                 if target_date < today:
                     continue
 
-                # Дедупликация: уже есть такая запись?
                 if await check_dedup(session, parent.summary, target_date):
                     continue
 
@@ -415,13 +442,12 @@ async def create_recurring_entries(parent_id: int, weeks: int = RECURRING_WEEKS_
                 created += 1
 
         await session.commit()
-        logging.info(f"🔄 Создано {created} регулярных записей для parent={parent_id}")
+        log.info("🔄 Создано %s регулярных записей для parent=%s", created, parent_id)
         return created
 
 
 async def cancel_recurring_series(parent_id: int) -> int:
-    """Удаляет все будущие записи серии."""
-    today = date.today()
+    today = bali_today()
     async with AsyncSessionMaker() as session:
         result = await session.execute(
             delete(ScrapedEvent).where(
@@ -433,5 +459,5 @@ async def cancel_recurring_series(parent_id: int) -> int:
         )
         await session.commit()
         count = result.rowcount or 0
-        logging.info(f"🗑 Отменена серия parent={parent_id}, удалено: {count}")
+        log.info("🗑 Отменена серия parent=%s, удалено: %s", parent_id, count)
         return count

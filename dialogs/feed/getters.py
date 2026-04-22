@@ -2,8 +2,9 @@
 import json
 import math
 import os
-from datetime import date
 from pathlib import Path
+
+from utils.timez import bali_today
 
 from aiogram_dialog import DialogManager
 from sqlalchemy import select, func, or_
@@ -37,7 +38,7 @@ async def get_category_events(dialog_manager: DialogManager, **kwargs) -> dict:
     page = await scroll.get_page() if scroll else 0
 
     async with AsyncSessionMaker() as session:
-        today = date.today()
+        today = bali_today()
         base_query = select(ScrapedEvent).where(ScrapedEvent.status == EventStatus.APPROVED)
 
         if category == "free_filter":
