@@ -10,10 +10,10 @@ class Settings(BaseSettings):
     telegram_api_id: int
     telegram_api_hash: str
 
-    # AI (DeepSeek)
-    deepseek_api_key: SecretStr
-    deepseek_base_url: str = "https://api.deepseek.com"
-    deepseek_model: str = "deepseek-chat"
+    # AI (любой OpenAI-совместимый провайдер: DeepSeek, Claude через vibecode-claude, и т.д.)
+    ai_api_key: SecretStr
+    ai_base_url: str = "https://api.deepseek.com"
+    ai_model: str = "deepseek-chat"
 
     # Админ
     admin_id: int

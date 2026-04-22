@@ -16,7 +16,10 @@
       "Bash(ssh root@bali \"cat /opt/kudabali/services/extra_sites_parser.py\")",
       "Read(//c/c/Users/mikos/OneDrive/Рабочий стол/KUDABALIBOT-main/**)",
       "Read(//c/c/Users/mikos/OneDrive/Рабочий стол/**)",
-      "Bash(python -c ' *)"
+      "Bash(python -c ' *)",
+      "WebFetch(domain:telegra.ph)",
+      "Bash(python -c \"import py_compile; py_compile.compile\\('services/analyzer.py', doraise=True\\); print\\('OK'\\)\")",
+      "Bash(python -m py_compile services/analyzer.py services/ai_assistant.py services/reviews_analyzer.py config.py config/settings.py)"
     ]
   }
 }

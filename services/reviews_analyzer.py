@@ -9,8 +9,8 @@ from config import config
 from pathlib import Path
 
 client = AsyncOpenAI(
-    api_key=config.deepseek_api_key.get_secret_value(),
-    base_url=config.deepseek_base_url
+    api_key=config.ai_api_key.get_secret_value(),
+    base_url=config.ai_base_url
 )
 
 # Загружаем названия мест из базы знаний
@@ -83,7 +83,7 @@ async def analyze_message_for_reviews(
         )
         
         response = await client.chat.completions.create(
-            model=config.deepseek_model,
+            model=config.ai_model,
             messages=[{"role": "user", "content": prompt}],
             temperature=0.1,
             max_tokens=1000

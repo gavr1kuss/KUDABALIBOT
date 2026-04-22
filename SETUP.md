@@ -46,10 +46,10 @@ BOT_TOKEN=12345:YOUR_BOT_TOKEN
 TELEGRAM_API_ID=1234567
 TELEGRAM_API_HASH=your_api_hash_here
 
-# DeepSeek API (platform.deepseek.com)
-DEEPSEEK_API_KEY=sk-xxxxxxxxxxxxxxxxxxxxxxxx
-DEEPSEEK_BASE_URL=https://api.deepseek.com
-DEEPSEEK_MODEL=deepseek-chat
+# AI (любой OpenAI-совместимый провайдер: DeepSeek, Claude через vibecode-claude и т.д.)
+AI_API_KEY=sk-xxxxxxxxxxxxxxxxxxxxxxxx
+AI_BASE_URL=https://api.deepseek.com
+AI_MODEL=deepseek-chat
 
 # Ваш Telegram ID (узнать у @userinfobot)
 ADMIN_ID=123456789

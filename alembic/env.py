@@ -12,7 +12,7 @@ for _var, _val in {
     "BOT_TOKEN": "dummy",
     "TELEGRAM_API_ID": "0",
     "TELEGRAM_API_HASH": "dummy",
-    "DEEPSEEK_API_KEY": "dummy",
+    "AI_API_KEY": "dummy",
     "ADMIN_ID": "0",
 }.items():
     os.environ.setdefault(_var, _val)

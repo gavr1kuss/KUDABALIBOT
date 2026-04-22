@@ -6,8 +6,8 @@ from config import config
 from services.reviews_analyzer import get_place_reviews
 
 client = AsyncOpenAI(
-    api_key=config.deepseek_api_key.get_secret_value(),
-    base_url=config.deepseek_base_url
+    api_key=config.ai_api_key.get_secret_value(),
+    base_url=config.ai_base_url
 )
 
 # Загружаем базу знаний
@@ -194,7 +194,7 @@ async def get_ai_response(user_message: str, chat_history: list = None) -> str:
     
     try:
         response = await client.chat.completions.create(
-            model=config.deepseek_model,
+            model=config.ai_model,
             messages=messages,
             temperature=0.5,
             max_tokens=800

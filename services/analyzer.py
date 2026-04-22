@@ -20,8 +20,8 @@ def bali_today() -> date:
 
 
 client = AsyncOpenAI(
-    api_key=config.deepseek_api_key.get_secret_value(),
-    base_url=config.deepseek_base_url
+    api_key=config.ai_api_key.get_secret_value(),
+    base_url=config.ai_base_url
 )
 
 BATCH_SIZE = 20
@@ -100,7 +100,7 @@ async def call_deepseek(prompt: str) -> str:
     for attempt in range(DEEPSEEK_RETRIES):
         try:
             response = await client.chat.completions.create(
-                model=config.deepseek_model,
+                model=config.ai_model,
                 messages=[{"role": "user", "content": prompt}],
                 temperature=0.1,
                 max_tokens=4000,

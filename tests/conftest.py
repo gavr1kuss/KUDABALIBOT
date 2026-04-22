@@ -19,7 +19,7 @@ _DUMMY_ENV = {
     "BOT_TOKEN": "123456789:AABBCCDDAABBCCDDAABBCCDDAABBCCDDAAB",
     "TELEGRAM_API_ID": "12345",
     "TELEGRAM_API_HASH": "deadbeefdeadbeefdeadbeefdeadbeef",
-    "DEEPSEEK_API_KEY": "sk-test-dummy-key",
+    "AI_API_KEY": "sk-test-dummy-key",
     "ADMIN_ID": "999999",
 }
 for _key, _val in _DUMMY_ENV.items():
