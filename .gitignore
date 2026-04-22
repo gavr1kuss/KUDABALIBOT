@@ -41,3 +41,24 @@ bot_backup.tar.gz
 bali_bot_*.tar.gz
 bot_code_*.tar.gz
 full_bot_code_complete.txt
+
+# Диагностика (дампы)
+*.tail
+*.txt.gz
+all_messages.txt
+crontab.txt
+dual_install.txt
+diff.txt
+stack.txt
+db_path.txt
+logs_list.txt
+session.txt
+ps.txt
+systemd.txt
+journalctl.txt
+
+# Мусор
+^C
+=*.*
+.claude/
+*.csv

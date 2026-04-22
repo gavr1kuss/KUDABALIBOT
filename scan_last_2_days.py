@@ -11,25 +11,12 @@ SESSION_NAME = 'server_listener'
 
 # Полный список чатов (93 шт)
 CHATS_TO_LISTEN = [
-    '@balichatmarket', '@balichat', '@balichatsurfing', '@balichatexchange', '@jobsbali',
-    '@balichatservices', '@balichatkid', '@blizkie_bali', '@balichatnash', '@balichat_woman',
-    '@balichatarenda', '@baliEast', '@balibeauty', '@voprosBali', '@balisale',
-    '@networking_bali', '@balibike', '@balidating', '@balidances', '@balichatdating',
-    '@bali_baraholka', '@bali_woman', '@balisurfer', '@balihealth', '@balichatpets',
-    '@tantra_blizkie_bali', '@bali_afishaa', '@balichatnews', '@eventsbali', '@balibc',
-    '@balichatfit', '@baliktoletit', '@balipackage', '@balifm_afisha', '@baliwomens',
-    '@balichatflood', '@networkingbali', '@balifm_media', '@bali_party', '@balichat_photovideo',
-    '@pvbali', '@baliyoga', '@bali_visa', '@balida21', '@Bali_buy_sale',
-    '@baliexchanges', '@buildbali', '@balirental', '@networkers_bali', '@bali_sharing',
-    '@businessmenBali', '@balimassag', '@balichildren', '@blizkie_eventss', '@baliontheway',
-    '@redkinvilla', '@designclothing', '@investbali', '@baligames', '@balisp',
-    '@balifruits', '@toursbali', '@seobali', '@balimoney', '@baliauto',
-    '@baliservice', '@balifood', '@balimc', '@balistop', '@Balibizness',
-    '@AI_baliafisha', '@bali_apteka', '@otdam_bali', '@kundalini_bali', '@balibasket',
-    '@Bali_House', '@peoplebali', '@honey_villas_indonesia', '@amanitaBali', '@yoganabali',
-    '@moneyclubbali', '@baliru', '@bali_znakomstva', '@weetsu_group_bali', '@Quest_Bali',
-    '@balirussia', '@BaliManClub', '@baliwomans', '@tranformationgames', '@Balidance',
-    '@baliUKR', '@eventmaker_bali', '@balisoul',
+    '@balichatik', '@balihealth', '@balichatdating', '@balichat', '@voprosBali',
+    '@balichat_bukit', '@balichat_event', '@baliwomens', '@blizkie_bali', '@balichatgilinow',
+    '@balidating', '@balichat_canggu', '@bali_party', '@balichatfit', '@balichatsurfing',
+    '@balichatflood', '@balichatparties', '@balichatnash', '@balidances', '@balifm_afisha',
+    '@networking_bali', '@Balibizness', '@blizkie_eventss', '@tantra_blizkie_bali', '@eventsbali',
+    '@seobali', '@toursbali', '@baliyoga', '@bali_afishaa',
 ]
 
 KEYWORDS = [
